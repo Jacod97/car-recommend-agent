@@ -19,38 +19,47 @@
 
 ## 2. User Scenario
 
-1. 상단에 선호 조건을 입력한다. 해당 값은 필터가 아닌 기준값이다.
-2. 에이전트가 필터값과 기준값을 판별한다. 기준값은 참고용 값, 필터값은 강한 제약조건이다.
-3. SQL 에이전트가 필터값을 거르고 참고용 값 기준으로 제품을 추천한다.
-4. 사용자가 해당 매물을 보고 질의응답을 통해 사용자에게 어울리는 매물을 추천한다.
-5. 추천을 할 땐 추천 이유를 함께 설명한다. (있으면 좋고 없어도 상관없는 기능)
+자세한 에이전트 구성과 시나리오는 [agent-design.md](agent-design.md)를 따른다.
+
+1. 사용자가 챗봇과 대화하며 예산, 소득·월 여유, 용도·탑승 인원·보유 기간을 말한다. 살 차 기준이 정해진 사용자는 통합 매물 목록을 필터로 보면서 옆 챗봇에 질문한다.
+2. 니즈 분석 에이전트가 대화를 필수 조건, 모델 수준 니즈, 매물 수준 니즈로 정리한다. 필수 조건만 매물을 거르는 강한 제약이고, 매물 수준 니즈는 순위를 매기는 기준값이다.
+3. 재무 에이전트가 소득·지출로 감당 가능한 예산 상한과 월 한도를 판단한다.
+4. 모델 선정 에이전트가 후보 모델을 고르고, 검색(코드)이 필수 조건과 후보 모델로 매물을 거른 뒤 점수 계산(코드)이 매물 수준 니즈에 가까운 순으로 상위 30대를 뽑는다.
+5. 딜러 에이전트가 TOP5를 골라 추천 이유와 함께 보여준다.
+6. 마음에 안 들면 피드백 분석 → 니즈 재작성 → 재추천을 반복하고, 특정 매물·모델 질문은 매물 분석·리뷰 에이전트가 답한다.
 
 ## 3. Data Collection
 
 매물은 주요 중고차 플랫폼을 모두 모아 하나의 스키마로 합치고, 리뷰·커뮤니티 텍스트는 "사람들이 차를 살 때 무엇을 중요하게 보는가"와 "에이전트가 무엇을 물어야 하는가"를 분석하는 데 쓴다.
 
-- **중고차 플랫폼**: 엔카, 케이카, 헤이딜러, 현대 인증중고차, 기아 인증중고차
+- **중고차 플랫폼**: 현대 인증중고차, 기아 인증중고차, 헤이딜러, 케이카(목록만). 엔카는 수집 금지로 제외 ([crawler.md](crawler.md))
 - **리뷰, 커뮤니티**: 유튜브 차량 리뷰, 보배드림, 클리앙, 헤이딜러 후기, 자동차 매체 시승기
 
 ## 4. System Architecture
 ```mermaid
 flowchart TB
-    UI["화면<br/>선호 조건(기준값) · 매물 목록 · 챗박스"]
+    UI["화면<br/>매물 목록 · 필터 · 챗박스"]
 
-    ORCH["오케스트레이터<br/>의도 분류 · 라우팅 · 대화 상태"]
+    ORCH["오케스트레이터<br/>메시지를 담당 에이전트로 라우팅"]
 
-    subgraph AGENTS["에이전트"]
-        PROFILE["프로필<br/>조건 추출 · 필터값/기준값 판별 · 되묻기"]
-        SQL["검색 (SQL)<br/>필터값 → WHERE · 요청 → 쿼리"]
-        INSPECT["매물 분석<br/>사고 · 적정가 · 트림"]
-        REVIEW["리뷰<br/>리뷰 근거 찾기"]
-        RANK["랭킹 엔진 (LLM 아님)<br/>기준값 대비 rerank"]
+    subgraph REC["추천 흐름"]
+        CHAT["대화<br/>부족한 정보를 하나씩 질문"]
+        NEEDS["니즈 분석<br/>필수 조건 · 모델 수준 · 매물 수준 니즈"]
+        FIN["재무<br/>예산 상한 · 월 한도"]
+        MODEL["모델 선정<br/>후보 모델"]
+        SEARCH["검색 (코드)<br/>필수 조건 · 후보 모델로 거르기"]
+        SCORE["점수 계산 (코드)<br/>매물 수준 니즈 → 상위 30대"]
+        DEALER["딜러<br/>TOP5 + 추천 이유"]
     end
+
+    FEEDBACK["피드백 분석<br/>마음에 안 드는 이유"]
+    INSPECT["매물 분석<br/>사고 이력 · 적정가"]
+    REVIEW["리뷰<br/>리뷰·커뮤니티 근거 + 출처"]
 
     subgraph TOOLS["Tools"]
         T_CALC["계산<br/>실수령 · 한도 · 할부 · 유지비"]
         T_QUERY["조회<br/>SQL · 제원 · 매물 상세"]
-        T_MODEL["모델<br/>적정가 · 사고 판정 · rerank"]
+        T_MODEL["모델<br/>적정가 · 사고 판정"]
         T_SEARCH["검색<br/>리뷰 RAG · 웹"]
     end
 
@@ -61,26 +70,35 @@ flowchart TB
         D_PROF[("프로필 · 대화 · 피드백")]
     end
 
-    UI -- "메시지 · 기준값 · 반응" --> ORCH
-    ORCH -- "재정렬 목록 · 답변 · 되묻기" --> UI
+    UI -- "메시지 · 필터 · 반응" --> ORCH
+    ORCH -- "질문 · 답변" --> UI
+    DEALER -- "TOP5 + 이유" --> UI
 
-    ORCH --> PROFILE
-    ORCH --> SQL
+    ORCH --> CHAT
+    ORCH --> FEEDBACK
     ORCH --> INSPECT
     ORCH --> REVIEW
-    ORCH --> RANK
 
-    PROFILE --> T_CALC
-    SQL --> T_QUERY
+    CHAT --> NEEDS
+    FEEDBACK -- "바뀐 점" --> NEEDS
+    NEEDS <--> FIN
+    NEEDS --> MODEL
+    MODEL <--> REVIEW
+    MODEL --> SEARCH
+    NEEDS -- "필수 조건 · 매물 수준 니즈" --> SEARCH
+    SEARCH --> SCORE
+    SCORE --> DEALER
+
+    FIN --> T_CALC
+    SEARCH --> T_QUERY
     INSPECT --> T_QUERY
     INSPECT --> T_MODEL
     REVIEW --> T_SEARCH
-    RANK --> T_MODEL
-    RANK --> T_CALC
 
     T_QUERY --> D_LIST
     T_QUERY --> D_SPEC
     T_MODEL --> D_LIST
     T_SEARCH --> D_REV
-    PROFILE --> D_PROF
+    NEEDS --> D_PROF
+    FEEDBACK --> D_PROF
 ```
