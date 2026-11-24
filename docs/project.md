@@ -23,10 +23,10 @@
 
 1. 사용자가 챗봇과 대화하며 예산, 소득·월 여유, 용도·탑승 인원·보유 기간을 말한다. 살 차 기준이 정해진 사용자는 통합 매물 목록을 필터로 보면서 옆 챗봇에 질문한다.
 2. 니즈 분석 에이전트가 대화를 필수 조건, 모델 수준 니즈, 매물 수준 니즈로 정리한다. 필수 조건만 매물을 거르는 강한 제약이고, 매물 수준 니즈는 순위를 매기는 기준값이다.
-3. 재무 에이전트가 소득·지출로 감당 가능한 예산 상한과 월 한도를 판단한다.
-4. 모델 선정 에이전트가 후보 모델을 고르고, 검색(코드)이 필수 조건과 후보 모델로 매물을 거른 뒤 점수 계산(코드)이 매물 수준 니즈에 가까운 순으로 상위 30대를 뽑는다.
+3. 재무 도구(코드)가 소득·지출로 감당 가능한 예산 상한과 월 한도를 계산한다.
+4. 모델 선정 에이전트가 후보 모델을 고르고, SQL 에이전트가 필수 조건과 후보 모델로 매물을 거른 뒤 점수 계산 도구(코드)가 매물 수준 니즈에 가까운 순으로 상위 30대를 뽑는다.
 5. 딜러 에이전트가 TOP5를 골라 추천 이유와 함께 보여준다.
-6. 마음에 안 들면 피드백 분석 → 니즈 재작성 → 재추천을 반복하고, 특정 매물·모델 질문은 매물 분석·리뷰 에이전트가 답한다.
+6. 마음에 안 들면 니즈 분석이 니즈를 새로 짜서 재추천을 반복하고, 특정 매물·모델 질문은 SQL 에이전트와 리뷰 에이전트가 찾은 내용으로 답한다.
 
 ## 3. Data Collection
 
@@ -40,47 +40,38 @@
 flowchart TB
     UI["화면<br/>매물 목록 · 필터 · 챗박스"]
 
-    ORCH["오케스트레이터<br/>메시지를 담당 에이전트로 라우팅"]
+    ORCH["오케스트레이터<br/>사용자와 대화 · 부족한 정보를 하나씩 질문<br/>나머지 메시지는 담당 에이전트로 라우팅"]
 
     subgraph REC["추천 흐름"]
-        CHAT["대화<br/>부족한 정보를 하나씩 질문"]
-        NEEDS["니즈 분석<br/>필수 조건 · 모델 수준 · 매물 수준 니즈"]
-        FIN["재무<br/>예산 상한 · 월 한도"]
+        NEEDS["니즈 분석<br/>필수 조건 · 모델 수준 · 매물 수준 니즈<br/>거절한 매물"]
         MODEL["모델 선정<br/>후보 모델"]
-        SEARCH["검색 (코드)<br/>필수 조건 · 후보 모델로 거르기"]
-        SCORE["점수 계산 (코드)<br/>매물 수준 니즈 → 상위 30대"]
+        SEARCH["SQL 에이전트<br/>필수 조건 · 후보 모델로 매물 거르기<br/>매물 · 제원 조회"]
         DEALER["딜러<br/>TOP5 + 추천 이유"]
     end
 
-    FEEDBACK["피드백 분석<br/>마음에 안 드는 이유"]
-    INSPECT["매물 분석<br/>사고 이력 · 적정가"]
-    REVIEW["리뷰<br/>리뷰·커뮤니티 근거 + 출처"]
+    REVIEW["리뷰<br/>리뷰·커뮤니티 근거 + 출처<br/>리뷰 RAG · 웹"]
 
-    subgraph TOOLS["Tools"]
-        T_CALC["계산<br/>실수령 · 한도 · 할부 · 유지비"]
-        T_QUERY["조회<br/>SQL · 제원 · 매물 상세"]
-        T_MODEL["모델<br/>적정가 · 사고 판정"]
-        T_SEARCH["검색<br/>리뷰 RAG · 웹"]
+    subgraph TOOLS["Tools (코드)"]
+        FIN["재무<br/>예산 상한 · 월 한도"]
+        SCORE["점수 계산<br/>매물 수준 니즈 → 상위 30대"]
     end
 
     subgraph DATA["데이터"]
-        D_LIST[("매물 DB (통합)")]
+        D_LIST[("매물 DB (통합)<br/>적정가 · 사고 판정 포함")]
         D_SPEC[("제원 DB")]
         D_REV[("리뷰 벡터 인덱스")]
         D_PROF[("프로필 · 대화 · 피드백")]
     end
 
-    UI -- "메시지 · 필터 · 반응" --> ORCH
+    UI -- "메시지 · 반응" --> ORCH
+    UI -- "필터" --> D_LIST
     ORCH -- "질문 · 답변" --> UI
     DEALER -- "TOP5 + 이유" --> UI
 
-    ORCH --> CHAT
-    ORCH --> FEEDBACK
-    ORCH --> INSPECT
-    ORCH --> REVIEW
+    ORCH --> NEEDS
+    ORCH -- "매물 질문" --> SEARCH
+    ORCH -- "모델 질문" --> REVIEW
 
-    CHAT --> NEEDS
-    FEEDBACK -- "바뀐 점" --> NEEDS
     NEEDS <--> FIN
     NEEDS --> MODEL
     MODEL <--> REVIEW
@@ -89,16 +80,8 @@ flowchart TB
     SEARCH --> SCORE
     SCORE --> DEALER
 
-    FIN --> T_CALC
-    SEARCH --> T_QUERY
-    INSPECT --> T_QUERY
-    INSPECT --> T_MODEL
-    REVIEW --> T_SEARCH
-
-    T_QUERY --> D_LIST
-    T_QUERY --> D_SPEC
-    T_MODEL --> D_LIST
-    T_SEARCH --> D_REV
+    SEARCH --> D_LIST
+    SEARCH --> D_SPEC
+    REVIEW --> D_REV
     NEEDS --> D_PROF
-    FEEDBACK --> D_PROF
 ```
